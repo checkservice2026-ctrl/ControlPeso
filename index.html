@@ -81,7 +81,7 @@ function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');setT
 
 /* ===== State / Storage ===== */
 const KEY='peso_app_v1';
-const DEF=()=>({settings:{initialWeight:null,targetWeight:null,targetDate:'',movingAveragePeriod:4,theme:'dark',unit:'kg',onboarded:false},measurements:[]});
+const DEF=()=>({settings:{initialWeight:null,targetWeight:null,targetDate:'',movingAveragePeriod:4,theme:'dark',unit:'kg',onboarded:false,height:null,lastExport:''},measurements:[]});
 function sanitize(o){
   const d=DEF();if(!o||typeof o!=='object')return d;
   const s=o.settings||{},n=v=>(typeof v==='number'&&v>=20&&v<=500)?v:null;
@@ -89,7 +89,7 @@ function sanitize(o){
   d.settings.targetDate=/^\d{4}-\d{2}-\d{2}$/.test(s.targetDate)?s.targetDate:'';
   d.settings.movingAveragePeriod=[3,4,6,8].includes(s.movingAveragePeriod)?s.movingAveragePeriod:4;
   d.settings.theme=['dark','light','system'].includes(s.theme)?s.theme:'dark';
-  d.settings.unit=UNITS[s.unit]?s.unit:'kg';d.settings.onboarded=!!s.onboarded;
+  d.settings.unit=UNITS[s.unit]?s.unit:'kg';d.settings.onboarded=!!s.onboarded;d.settings.height=(typeof s.height==='number'&&s.height>=100&&s.height<=250)?s.height:null;d.settings.lastExport=/^\d{4}-\d{2}-\d{2}$/.test(s.lastExport)?s.lastExport:'';
   const seen=new Set();
   (Array.isArray(o.measurements)?o.measurements:[]).forEach(m=>{
     if(!m||typeof m.weight!=='number'||!(m.weight>=20&&m.weight<=500)||!/^\d{4}-\d{2}-\d{2}$/.test(m.date))return;
@@ -141,6 +141,7 @@ function chartHTML(pts){
   const t0=pts[0].t,span=Math.max(pts[n-1].t-t0,1),W=Math.max(box,Math.min(span*14+pl+pr,4000));
   const tg=S.settings.targetWeight;let vals=pts.flatMap(p=>[p.weight,p.ma]);
   if(tg!=null&&Math.abs(tg-Math.min(...vals))<30)vals.push(tg);
+  const td=S.settings.targetDate,iw=S.settings.initialWeight,ts=day(sorted()[0].date),ta=td?day(td):0,ideal=t=>iw+(tg-iw)*Math.min(1,Math.max(0,(t-ts)/Math.max(ta-ts,1))),hasI=td&&iw!=null&&tg!=null&&ta>ts;if(hasI)vals.push(ideal(t0),ideal(pts[n-1].t));
   let lo=Math.min(...vals),hi=Math.max(...vals);const pad=Math.max((hi-lo)*.15,.4);lo-=pad;hi+=pad;
   const X=t=>pl+(t-t0)/span*(W-pl-pr),Y=w=>pt+(1-(w-lo)/(hi-lo))*(H-pt-pb);
   CH={pts,X,Y,W};
@@ -150,13 +151,15 @@ function chartHTML(pts){
   pts.forEach((p,i)=>{if(i%step===0)g+=`<text x="${X(p.t)}" y="${H-8}" fill="var(--mu)" font-size="11" text-anchor="middle">${fdate(p.date)}</text>`});
   const path=k=>pts.map((p,i)=>(i?'L':'M')+X(p.t).toFixed(1)+' '+Y(p[k]).toFixed(1)).join('');
   if(tg!=null&&tg>=lo&&tg<=hi)g+=`<line x1="${pl}" x2="${W-pr}" y1="${Y(tg)}" y2="${Y(tg)}" stroke="var(--mu)" stroke-dasharray="5 5"/>`;
+  const Z=bmiZones();if(Z)Z.forEach(z=>{const a=Math.max(z.lo,lo),b=Math.min(z.hi,hi);if(a>=b)return;g+=`<rect x="${pl}" y="${Y(b)}" width="${W-pl-pr}" height="${Y(a)-Y(b)}" fill="${z.c}" opacity=".10"/><text x="${W-pr-6}" y="${Y(b)+14}" fill="${z.c}" font-size="10" text-anchor="end">${z.n}</text>`});
+  if(hasI)g+=`<line x1="${X(t0)}" y1="${Y(ideal(t0))}" x2="${X(pts[n-1].t)}" y2="${Y(ideal(pts[n-1].t))}" stroke="var(--acc)" stroke-width="2.5" stroke-dasharray="1 7" stroke-linecap="round"/>`;
   g+=`<path d="${path('weight')}" fill="none" stroke="var(--acc)" stroke-width="2" opacity=".55" stroke-linejoin="round"/>`;
   g+=`<path d="${path('ma')}" fill="none" stroke="var(--ma)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>`;
   g+=pts.map(p=>`<circle cx="${X(p.t)}" cy="${Y(p.weight)}" r="4" fill="var(--card)" stroke="var(--acc)" stroke-width="2.5"/>`).join('');
   g+=`<line id="mk" y1="${pt}" y2="${H-pb}" stroke="var(--mu)" stroke-dasharray="3 3" opacity="0"/>`;
   return`<div class="cs" id="cs"><svg id="svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${g}</svg></div>
   <div id="tip">Tocá un punto para ver el detalle.</div>
-  <div class="lg"><span><i style="background:var(--acc)"></i>Peso</span><span><i style="background:var(--ma)"></i>Media móvil</span>${tg!=null?'<span>- - Objetivo</span>':''}</div>`;
+  <div class="lg"><span><i style="background:var(--acc)"></i>Peso</span><span><i style="background:var(--ma)"></i>Media móvil</span>${tg!=null?'<span>- - Objetivo</span>':''}${hasI?'<span>· · Ideal</span>':''}${Z?'<span>Zonas IMC (OMS)</span>':''}</div>`;
 }
 function wireChart(){
   const svg=$('#svg');if(!svg||!CH)return;
@@ -199,6 +202,7 @@ function alertsHTML(all){
     if(l.weight<Math.min(...prev))c.push('Nuevo mínimo: '+fw(l.weight));
     if(l.weight>Math.max(...prev))c.push('Nuevo máximo: '+fw(l.weight))}
   if(weekCount()===0)c.push('Falta registrar peso esta semana');
+  if(all.length>=5&&(!S.settings.lastExport||day(today())-day(S.settings.lastExport)>14))c.push('Hacé un backup JSON (Ajustes)');
   return c.length?`<div style="margin-bottom:12px">${c.map(x=>`<span class="chip g">${esc(x)}</span>`).join('')}</div>`:'';
 }
 function trendHTML(pts,all){
@@ -218,7 +222,7 @@ function statsHTML(pts){
   const wk=weekly(pts),{initialWeight:i,targetWeight:t}=S.settings,gain=t!=null&&i!=null&&t>i;
   let best='—';if(wk.length>=3){const ds=wk.filter(x=>x.delta!=null);const b=ds.reduce((a,x)=>(gain?x.delta>a.delta:x.delta<a.delta)?x:a);best=fd(b.delta)+' <span class="k">('+fdate(b.k)+')</span>'}
   const card=(k,v)=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`;
-  return`<div class="grid" style="margin-bottom:16px">${card('Peso mínimo',fw(Math.min(...w)))}${card('Peso máximo',fw(Math.max(...w)))}${card('Promedio',fw(avg))}${card('Mediciones',pts.length)}${card('Cambio total',fd(w[w.length-1]-w[0]))}${card('Mejor semana',best)}</div>`;
+  return`<div class="grid" style="margin-bottom:16px">${card('Peso mínimo',fw(Math.min(...w)))}${card('Peso máximo',fw(Math.max(...w)))}${card('Promedio',fw(avg))}${card('Mediciones',pts.length)}${card('Cambio total',fd(w[w.length-1]-w[0]))}${card('Mejor semana',best)}${S.settings.height?card('IMC',nf.format(w[w.length-1]/((S.settings.height/100)**2))):''}</div>`;
 }
 function summaryHTML(all,pts){
   const L=[];if(!all.length)return'';
@@ -241,10 +245,25 @@ function itemHTML(p){
   ${open?`<div class="nt">${esc(p.notes)}</div>`:has?`<div class="nt k" style="padding-bottom:0">📝 Ver nota</div>`:''}
   <div class="mini"><button data-a="edit" data-v="${p.id}">Editar</button><button data-a="del" data-v="${p.id}" style="color:var(--bad)">Eliminar</button></div></div>`;
 }
+function bmiZones(){const H=S.settings.height;if(!H)return null;const q=(H/100)**2,B=[0,18.5,25,30,Infinity],N=['Bajo peso','Normal','Sobrepeso','Obesidad'],C=['#5aa9ff','#5ee0b0','#ffb454','#ff6b6b'];return N.map((n,i)=>({n,c:C[i],lo:B[i]*q,hi:B[i+1]*q}))}
+function zonasHTML(all){const Z=bmiZones();if(!Z)return'<div class="card"><h2>Peso según tu altura</h2><div class="sub">Cargá tu altura en Ajustes para ver las zonas de IMC en el gráfico.</div></div>';
+  const cur=all.length?all[all.length-1].weight:null;
+  return`<div class="card"><h2>Peso según tu altura (${S.settings.height} cm)</h2>${Z.map((z,i)=>{const on=cur!=null&&cur>=z.lo&&cur<z.hi,r=i===0?'< '+fw(z.hi):z.hi===Infinity?'≥ '+fw(z.lo):fw(z.lo)+' – '+fw(z.hi);
+  return`<div class="it"><div class="row"><span><i style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${z.c};margin-right:8px"></i>${z.n}${on?' <b>← estás acá</b>':''}</span><b>${r}</b></div></div>`}).join('')}<div class="k" style="margin-top:8px">Referencia OMS para adultos (IMC 18,5 / 25 / 30). Es orientativa, no un diagnóstico.</div></div>`}
+function barsHTML(pts){const w=weekly(pts).slice(-12);if(w.length<2)return'';const lo=Math.min(...w.map(x=>x.avg)),hi=Math.max(...w.map(x=>x.avg)),r=Math.max(hi-lo,.1);
+  return`<div style="display:flex;align-items:flex-end;gap:6px;height:115px;margin-bottom:14px">${w.map(x=>`<div style="flex:1;text-align:center"><div style="height:${20+(x.avg-lo)/r*70}px;background:var(--acc);opacity:.8;border-radius:8px"></div><div class="k" style="font-size:10px;margin-top:4px">${fdate(x.k)}</div></div>`).join('')}</div>`}
+function cmpHTML(all){const g={};all.forEach(p=>(g[p.date.slice(0,7)]??=[]).push(p.weight));const ks=Object.keys(g).sort();if(ks.length<2)return'';const av=k=>g[k].reduce((a,b)=>a+b,0)/g[k].length,a=ks[ks.length-1],b=ks[ks.length-2],d=av(a)-av(b);
+  return`<div class="card"><h2>Este mes vs anterior</h2><div class="row"><div><div class="k">Anterior</div><div class="v">${fw(av(b))}</div></div><div><div class="k">Este mes</div><div class="v">${fw(av(a))}</div></div><div><div class="k">Cambio</div><div class="v ${d>0?'up':'dn'}">${fd(d)}</div></div></div></div>`}
+function markExp(){S.settings.lastExport=today();save()}
+function countUp(){const e=$('#cur');if(!e||matchMedia('(prefers-reduced-motion: reduce)').matches)return;const l=series().slice(-1)[0];if(!l)return;const to=l.weight*U().f,from=window._lw??to,t0=performance.now();window._lw=to;if(from===to)return;const tn=e.firstChild;(function s(t){const k=Math.min(1,(t-t0)/500);tn.nodeValue=nf.format(from+(to-from)*k)+' ';if(k<1)requestAnimationFrame(s)})(t0)}
+async function shareImg(){const all=series();if(all.length<2)return toast('Faltan datos');const c=document.createElement('canvas');c.width=c.height=1080;const x=c.getContext('2d'),l=all[all.length-1],f=all[0],dark=document.documentElement.dataset.t!=='light',F='-apple-system,Helvetica,sans-serif';
+  x.fillStyle=dark?'#0b0d10':'#f4f5f8';x.fillRect(0,0,1080,1080);x.fillStyle=dark?'#f2f4f7':'#12151b';x.font='600 46px '+F;x.fillText('Mi Peso',80,120);x.font='700 170px '+F;x.fillText(nf.format(l.weight*U().f)+' '+U().l,80,340);x.font='500 48px '+F;x.fillStyle='#8b93a1';x.fillText(fd(l.weight-f.weight)+' desde '+fdate(f.date),80,425);
+  const p=all.slice(-40),lo=Math.min(...p.map(q=>q.ma)),hi=Math.max(...p.map(q=>q.ma)),r=Math.max(hi-lo,.1);x.strokeStyle='#5ee0b0';x.lineWidth=10;x.lineJoin='round';x.beginPath();p.forEach((q,i)=>{const X=80+i/(p.length-1)*920,Y=940-(q.ma-lo)/r*380;i?x.lineTo(X,Y):x.moveTo(X,Y)});x.stroke();
+  c.toBlob(async b=>{const file=new File([b],'mi-peso.png',{type:'image/png'});try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file]});return}}catch(e){return}download('mi-peso.png',b,'image/png')})}
 function weeklyHTML(pts){
   const wk=weekly(pts).reverse().slice(0,26);
   if(wk.length<1)return'';
-  return`<div class="card"><h2>Promedio semanal</h2>${wk.map(x=>`<div class="it"><div class="row"><span><b>${fdate(x.k)}</b> <span class="k">${x.n} med.</span></span><b>${fw(x.avg)}</b><span class="${x.delta==null?'k':x.delta>0?'up':'dn'}">${x.delta==null?'—':arrow(x.delta)+' '+fd(x.delta)}</span></div></div>`).join('')}</div>`;
+  return`<div class="card"><h2>Promedio semanal</h2>${barsHTML(pts)}${wk.map(x=>`<div class="it"><div class="row"><span><b>${fdate(x.k)}</b> <span class="k">${x.n} med.</span></span><b>${fw(x.avg)}</b><span class="${x.delta==null?'k':x.delta>0?'up':'dn'}">${x.delta==null?'—':arrow(x.delta)+' '+fd(x.delta)}</span></div></div>`).join('')}</div>`;
 }
 function view(){
   const all=series(),pts=inRange(all),h=$('#app');let o='';
@@ -255,7 +274,7 @@ function view(){
   }else if(tab==='evo'){
     o=`<div class="hd"><h1>Evolución</h1></div>${segHTML()}<div class="card">${chartHTML(pts)}</div>
     <div class="card"><h2>Media móvil</h2><div class="seg" style="margin:0">${[3,4,6,8].map(n=>`<button data-a="ma" data-v="${n}" class="${n===S.settings.movingAveragePeriod?'on':''}">${n}</button>`).join('')}</div></div>
-    ${trendHTML(pts,all)}${weeklyHTML(pts)}${statsHTML(pts)}`;
+    ${trendHTML(pts,all)}${cmpHTML(all)}${zonasHTML(all)}${weeklyHTML(pts)}${statsHTML(pts)}<button class="btn s" data-a="share">Compartir progreso</button>`;
   }else if(tab==='hist'){
     o=`<div class="hd"><h1>Historial</h1><button class="ib" data-a="add" aria-label="Agregar">＋</button></div><div class="card">${all.length?[...all].reverse().map(itemHTML).join(''):'<div class="empty">No hay mediciones todavía.</div>'}</div>`;
   }else{
@@ -265,13 +284,14 @@ function view(){
     <label>Peso inicial (${U().l})</label><input id="s_i" inputmode="decimal" value="${inU(s.initialWeight)}">
     <label>Peso objetivo (${U().l})</label><input id="s_t" inputmode="decimal" value="${inU(s.targetWeight)}">
     <label>Fecha objetivo (opcional)</label><input id="s_d" type="date" value="${s.targetDate}">
+    <label>Altura en cm (opcional, para IMC)</label><input id="s_h" inputmode="decimal" value="${s.height||''}">
     <button class="btn" data-a="saveset">Guardar objetivo</button></div>
-    <div class="card"><h2>Preferencias</h2><label>Unidad</label><select id="s_u"><option value="kg" selected>Kilogramos (kg)</option></select>
+    <div class="card"><h2>Preferencias</h2><label>Unidad</label><select id="s_u"><option value="kg" ${s.unit==='kg'?'selected':''}>Kilogramos (kg)</option><option value="lb" ${s.unit==='lb'?'selected':''}>Libras (lb)</option></select>
     <label>Tema</label><div class="seg">${[['dark','Dark'],['light','Light'],['system','Sistema']].map(([v,t])=>`<button data-a="theme" data-v="${v}" class="${s.theme===v?'on':''}">${t}</button>`).join('')}</div></div>
     <div class="card"><h2>Datos</h2><button class="btn s" data-a="csv" style="margin-top:0">Exportar CSV</button><button class="btn s" data-a="json">Exportar backup JSON</button><button class="btn s" data-a="imp">Importar backup</button><button class="btn d" data-a="wipe">Eliminar todos los datos</button></div>
     <div class="sub" style="text-align:center">Todos los datos se guardan solo en este dispositivo.</div>`;
   }
-  h.innerHTML=o;wireChart();
+  h.innerHTML=o;wireChart();countUp();
   $('#nav').innerHTML=[['home','⌂','Inicio'],['evo','📈','Evolución'],['hist','📋','Historial'],['set','⚙','Ajustes']].map(([k,i,t])=>`<button data-a="tab" data-v="${k}" class="${tab===k?'on':''}"><span>${i}</span>${t}</button>`).join('');
 }
 function applyTheme(){
@@ -292,6 +312,7 @@ function measureSheet(id){
   <label>Peso (${U().l})</label><input id="m_w" inputmode="decimal" placeholder="82.4" value="${m?inU(m.weight):''}">
   <div class="two"><div><label>Fecha</label><input id="m_d" type="date" value="${m?m.date:today()}"></div><div><label>Hora (opcional)</label><input id="m_t" type="time" value="${m?m.time:''}"></div></div>
   <label>Notas (opcional)</label><input id="m_n" maxlength="300" placeholder="En ayunas, después de entrenar…" value="${m?esc(m.notes):''}">
+  <div style="margin-top:8px">${['En ayunas','Post-entreno','Fin de semana','Tras comer'].map(t=>`<button class="chip" style="min-height:40px" data-a="tag" data-v="${t}">${t}</button>`).join('')}</div>
   <div id="m_e" style="color:var(--bad);font-size:14px;min-height:20px;margin-top:8px"></div>
   <button class="btn" id="m_s">Guardar peso</button><button class="btn s" data-a="close">Cancelar</button>`);
   $('#m_s').onclick=()=>{
@@ -325,11 +346,11 @@ function download(name,text,type){
   document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
 }
 const csvCell=v=>'"'+String(v).replace(/"/g,'""')+'"';
-function exportCSV(){
+function exportCSV(){markExp();
   const rows=[['Fecha','Hora','Peso','Notas'],...sorted().map(m=>[m.date,m.time,String(m.weight).replace('.',','),m.notes])];
   download('mi-peso.csv','\ufeff'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),'text/csv');
 }
-function exportJSON(){download('mi-peso-backup-'+today()+'.json',JSON.stringify(S,null,2),'application/json')}
+function exportJSON(){markExp();download('mi-peso-backup-'+today()+'.json',JSON.stringify(S,null,2),'application/json')}
 function importFile(f){
   const r=new FileReader();
   r.onload=()=>{
@@ -358,23 +379,27 @@ document.addEventListener('click',e=>{
   else if(a==='range'){range=v;view()}
   else if(a==='ma'){S.settings.movingAveragePeriod=+v;save();view()}
   else if(a==='theme'){S.settings.theme=v;save();applyTheme();view()}
+  else if(a==='tag'){const n=$('#m_n');n.value=n.value?n.value+', '+v:v}
+  else if(a==='share')shareImg();
   else if(a==='close'||(b.id==='ov'))closeSheet();
   else if(a==='saveset'){
     const i=parseNum($('#s_i').value),t=parseNum($('#s_t').value);
     if(!(i*U().f>=20&&i*U().f<=500&&t*U().f>=20&&t*U().f<=500))return toast('Valores inválidos');
-    Object.assign(S.settings,{initialWeight:i,targetWeight:t,targetDate:$('#s_d').value});save();view();toast('✓ Objetivo guardado');
+    Object.assign(S.settings,{initialWeight:i,targetWeight:t,targetDate:$('#s_d').value,height:parseFloat($('#s_h').value.replace(',','.'))||null});save();view();toast('✓ Objetivo guardado');
   }
   else if(a==='csv')exportCSV();
   else if(a==='json')exportJSON();
   else if(a==='imp')$('#file').click();
   else if(a==='wipe')confirmSheet('¿Eliminar TODOS los datos?','Continuar',()=>confirmSheet('Esto no se puede deshacer. ¿Seguro?','Sí, eliminar todo',()=>{S=DEF();save();applyTheme();view();onboard()}));
 });
+document.addEventListener('change',e=>{if(e.target.id==='s_u'){S.settings.unit=e.target.value;window._lw=undefined;save();view()}});
 $('#ov').addEventListener('click',e=>{if(e.target.id==='ov')closeSheet()});
 $('#file').addEventListener('change',e=>{if(e.target.files[0])importFile(e.target.files[0]);e.target.value=''});
 matchMedia('(prefers-color-scheme: light)').addEventListener?.('change',()=>{if(S.settings.theme==='system')applyTheme()});
 let rz;addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(view,200)});
 
 /* ===== Init ===== */
+try{const c=document.createElement('canvas');c.width=c.height=180;const x=c.getContext('2d');x.fillStyle='#0b0d10';x.fillRect(0,0,180,180);x.strokeStyle='#5ee0b0';x.lineWidth=10;x.lineCap=x.lineJoin='round';x.beginPath();x.moveTo(36,112);x.lineTo(72,122);x.lineTo(108,72);x.lineTo(144,58);x.stroke();x.fillStyle='#ffb454';x.beginPath();x.arc(144,58,13,0,7);x.fill();const l=document.createElement('link');l.rel='apple-touch-icon';l.href=c.toDataURL('image/png');document.head.appendChild(l)}catch(e){}
 applyTheme();view();
 if(!S.settings.onboarded&&!S.measurements.length)onboard();
 </script>
